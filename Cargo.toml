@@ -12,7 +12,6 @@ edition = "2021"
 [dependencies]
 quinn = { version = "0.9" }
 rustls = { version = "0.20", features = ["dangerous_configuration", "quic"] }
-rcgen = { version = "0.10" }
 tokio = { version = "1", features = ["fs", "io-util", "rt-multi-thread"] }
 anyhow = { version = "1" }
 webpki = { version = "0.22" }

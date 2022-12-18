@@ -30,45 +30,8 @@ pub struct MyIdentity {
 
 impl MyIdentity {
     pub async fn new(name: &str) -> anyhow::Result<Self> {
-        let cert = rcgen::generate_simple_self_signed(vec![])?;
-
-        let private_filename = format!("private-key-{}.der", name);
-        match OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&private_filename)
-            .await
-        {
-            Ok(mut file) => {
-                // TODO FIXME find out crypto algo
-                file.write_all(&cert.serialize_private_key_der()).await?;
-                file.sync_all().await?;
-            }
-            Err(error) => {
-                if error.kind() != ErrorKind::AlreadyExists {
-                    Err(error)?;
-                }
-            }
-        }
-
-        let public_filename = format!("public-key-{}.der", name);
-        match OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&public_filename)
-            .await
-        {
-            Ok(mut file) => {
-                // TODO FIXME find out crypto algo
-                file.write_all(&cert.serialize_der()?).await?;
-                file.sync_all().await?;
-            }
-            Err(error) => {
-                if error.kind() != ErrorKind::AlreadyExists {
-                    Err(error)?;
-                }
-            }
-        }
+        let private_filename = format!("{}-key.der", name);
+        let public_filename = format!("{}-cert.der", name);
 
         let mut private_file = OpenOptions::new()
             .read(true)
