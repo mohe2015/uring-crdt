@@ -11,6 +11,7 @@ use std::{
 };
 
 use cert_verifier::MutableClientCertVerifier;
+use futures_util::future::try_join;
 use quinn::Endpoint;
 use rustls::{
     client::ServerCertVerifier, Certificate, ClientConfig, PrivateKey, RootCertStore, ServerConfig,
@@ -132,6 +133,8 @@ async fn server() -> anyhow::Result<()> {
     while let Some(conn) = endpoint.accept().await {
         let mut connection = conn.await?;
 
+        println!("connected!");
+
         // Save connection somewhere, start transferring, receiving data, see DataTransfer tutorial.
     }
 
@@ -145,6 +148,8 @@ fn main() -> anyhow::Result<()> {
         .unwrap()
         .block_on(async {
             println!("Hello world");
+
+            let result = try_join(client(), server()).await?;
 
             Ok(())
         })
