@@ -8,12 +8,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 ## Setup
 
-bash
-```
+
+```bash
 openssl genpkey -algorithm ed25519 -outform der -out server-key.der
-openssl req -addext basicConstraints=CA:FALSE -nodes -x509 -keyform der -key server-key.der -outform der -out server-cert.der -sha256 -batch -days 3650 -subj "/CN=localhost"
+openssl req -addext basicConstraints=critical,CA:FALSE -addext "subjectAltName = DNS:example.org" -nodes -x509 -keyform der -key server-key.der -outform der -out server-cert.der -sha256 -batch -days 3650 -subj "/CN=example.org"
 openssl genpkey -algorithm ed25519 -outform der -out client-key.der
-openssl req -addext basicConstraints=CA:FALSE -nodes -x509 -keyform der -key client-key.der -outform der -out client-cert.der -sha256 -batch -days 3650 -subj "/CN=localhost"
+openssl req -addext basicConstraints=critical,CA:FALSE -addext "subjectAltName = DNS:example.org" -nodes -x509 -keyform der -key client-key.der -outform der -out client-cert.der -sha256 -batch -days 3650 -subj "/CN=example.org"
+
+openssl x509 -in client-cert.der -inform der -text
 ```
 
 ## Documentation (also of dependencies because git dependencies)

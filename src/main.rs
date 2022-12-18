@@ -4,18 +4,14 @@
 mod cert_verifier;
 
 use std::{
-    error::Error,
-    io::ErrorKind,
     net::SocketAddr,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, RwLock},
 };
 
 use cert_verifier::MutableClientCertVerifier;
 use futures_util::future::try_join;
 use quinn::Endpoint;
-use rustls::{
-    client::ServerCertVerifier, Certificate, ClientConfig, PrivateKey, RootCertStore, ServerConfig,
-};
+use rustls::{Certificate, ClientConfig, PrivateKey, RootCertStore, ServerConfig};
 use tokio::{
     fs::{File, OpenOptions},
     io::{AsyncReadExt, AsyncWriteExt},
@@ -30,8 +26,8 @@ pub struct MyIdentity {
 
 impl MyIdentity {
     pub async fn new(name: &str) -> anyhow::Result<Self> {
-        let private_filename = format!("{}-key.der", name);
-        let public_filename = format!("{}-cert.der", name);
+        let private_filename = format!("{name}-key.der");
+        let public_filename = format!("{name}-cert.der");
 
         let mut private_file = OpenOptions::new()
             .read(true)
@@ -63,7 +59,7 @@ impl CmRDT {
     }
 }
 
-static SERVER_NAME: &str = "localhost";
+static SERVER_NAME: &str = "example.org";
 
 fn client_addr() -> SocketAddr {
     "127.0.0.1:5000".parse::<SocketAddr>().unwrap()
@@ -95,9 +91,9 @@ async fn client() -> anyhow::Result<()> {
             client_identity.private_key,
         )?;
 
-    let mut endpoint = Endpoint::client(client_addr())?;
+    let endpoint = Endpoint::client(client_addr())?;
 
-    let connection = endpoint
+    let _connection = endpoint
         .connect_with(
             quinn::ClientConfig::new(Arc::new(client_config)),
             server_addr(),
@@ -137,7 +133,7 @@ async fn server() -> anyhow::Result<()> {
 
     // Start iterating over incoming connections.
     while let Some(conn) = endpoint.accept().await {
-        let mut connection = conn.await?;
+        let _connection = conn.await?;
 
         println!("connected!");
 
@@ -155,7 +151,9 @@ fn main() -> anyhow::Result<()> {
         .block_on(async {
             println!("Hello world");
 
-            let result = try_join(client(), server()).await?;
+            //server().await?;
+
+            let _result = try_join(client(), server()).await?;
 
             Ok(())
         })
