@@ -3,15 +3,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 mod cert_verifier;
 
-use std::{error::Error, io::ErrorKind, sync::Arc};
+use std::{error::Error, io::ErrorKind, net::SocketAddr, sync::Arc};
 
+use quinn::Endpoint;
 use rustls::{client::ServerCertVerifier, Certificate, ClientConfig, PrivateKey, RootCertStore};
 use tokio::{
     fs::{File, OpenOptions},
     io::{AsyncReadExt, AsyncWriteExt},
 };
 
-use crate::cert_verifier::MutableWebPkiVerifier;
+use crate::cert_verifier::{MutableResolvesClientCert, MutableWebPkiVerifier};
 
 pub struct MyIdentity {
     private_key: PrivateKey,
@@ -63,6 +64,16 @@ impl CmRDT {
     }
 }
 
+static SERVER_NAME: &str = "localhost";
+
+fn client_addr() -> SocketAddr {
+    "127.0.0.1:5000".parse::<SocketAddr>().unwrap()
+}
+
+fn server_addr() -> SocketAddr {
+    "127.0.0.1:5001".parse::<SocketAddr>().unwrap()
+}
+
 fn main() -> anyhow::Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -82,7 +93,19 @@ fn main() -> anyhow::Result<()> {
                 .with_safe_default_kx_groups()
                 .with_safe_default_protocol_versions()
                 .unwrap()
-                .with_custom_certificate_verifier(server_verifier);
+                .with_custom_certificate_verifier(server_verifier)
+                .with_single_cert(vec![], identity.private_key)?;
+
+            let mut endpoint = Endpoint::client(client_addr())?;
+
+            // Connect to the server passing in the server name which is supposed to be in the server certificate.
+            let connection = endpoint
+                .connect_with(
+                    quinn::ClientConfig::new(Arc::new(client_config)),
+                    server_addr(),
+                    SERVER_NAME,
+                )?
+                .await?;
 
             Ok(())
         })

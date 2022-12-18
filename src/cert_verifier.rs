@@ -1,7 +1,7 @@
 use std::time::SystemTime;
 
 use rustls::{
-    client::{ServerCertVerified, ServerCertVerifier, WebPkiVerifier},
+    client::{ResolvesClientCert, ServerCertVerified, ServerCertVerifier, WebPkiVerifier},
     Certificate, Error, RootCertStore, ServerName,
 };
 
@@ -19,7 +19,7 @@ impl ServerCertVerifier for MutableWebPkiVerifier {
         ocsp_response: &[u8],
         now: SystemTime,
     ) -> Result<ServerCertVerified, Error> {
-        WebPkiVerifier::new(self.roots, None).verify_server_cert(
+        WebPkiVerifier::new(self.roots.to_owned(), None).verify_server_cert(
             end_entity,
             intermediates,
             server_name,
