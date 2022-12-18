@@ -11,9 +11,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 bash
 ```
 openssl genpkey -algorithm ed25519 -outform der -out server-key.der
-openssl req -addext basicConstraints=critical,CA:FALSE -nodes -x509 -keyform der -key server-key.der -outform der -out server-cert.der -sha256 -batch -days 3650 -subj "/CN=localhost"
+openssl req -addext basicConstraints=CA:FALSE -nodes -x509 -keyform der -key server-key.der -outform der -out server-cert.der -sha256 -batch -days 3650 -subj "/CN=localhost"
 openssl genpkey -algorithm ed25519 -outform der -out client-key.der
-openssl req -addext basicConstraints=critical,CA:FALSE -nodes -x509 -keyform der -key client-key.der -outform der -out client-cert.der -sha256 -batch -days 3650 -subj "/CN=localhost"
+openssl req -addext basicConstraints=CA:FALSE -nodes -x509 -keyform der -key client-key.der -outform der -out client-cert.der -sha256 -batch -days 3650 -subj "/CN=localhost"
 ```
 
 ## Documentation (also of dependencies because git dependencies)

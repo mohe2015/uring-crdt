@@ -74,7 +74,8 @@ fn server_addr() -> SocketAddr {
 }
 
 async fn client() -> anyhow::Result<()> {
-    let identity = MyIdentity::new("client").await?;
+    let client_identity = MyIdentity::new("client").await?;
+    let server_identity = MyIdentity::new("server").await?;
 
     let server_verifier: Arc<MutableWebPkiVerifier> = Arc::new(MutableWebPkiVerifier {
         roots: RwLock::new(RootCertStore::empty()),
@@ -84,12 +85,15 @@ async fn client() -> anyhow::Result<()> {
         .roots
         .write()
         .unwrap()
-        .add_parsable_certificates(&Vec::new());
+        .add(&server_identity.certificate)?;
 
     let client_config = ClientConfig::builder()
         .with_safe_defaults()
         .with_custom_certificate_verifier(server_verifier)
-        .with_single_cert(vec![identity.certificate], identity.private_key)?;
+        .with_single_cert(
+            vec![client_identity.certificate],
+            client_identity.private_key,
+        )?;
 
     let mut endpoint = Endpoint::client(client_addr())?;
 
@@ -105,16 +109,26 @@ async fn client() -> anyhow::Result<()> {
 }
 
 async fn server() -> anyhow::Result<()> {
-    let identity = MyIdentity::new("server").await?;
+    let server_identity = MyIdentity::new("server").await?;
+    let client_identity = MyIdentity::new("client").await?;
 
     let client_cert_verifier = Arc::new(MutableClientCertVerifier {
         roots: RwLock::new(RootCertStore::empty()),
     });
 
+    client_cert_verifier
+        .roots
+        .write()
+        .unwrap()
+        .add(&client_identity.certificate)?;
+
     let server_config = ServerConfig::builder()
         .with_safe_defaults()
         .with_client_cert_verifier(client_cert_verifier)
-        .with_single_cert(vec![identity.certificate], identity.private_key)?;
+        .with_single_cert(
+            vec![server_identity.certificate],
+            server_identity.private_key,
+        )?;
 
     let endpoint = Endpoint::server(
         quinn::ServerConfig::with_crypto(Arc::new(server_config)),
