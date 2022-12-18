@@ -10,4 +10,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tokio-uring = "0.4"
+quinn = { version = "0.9" }
+rustls = { version = "0.20", features = ["dangerous_configuration", "quic"] }
+rcgen = { version = "0.10" }
+tokio = { version = "1", features = ["fs", "io-util", "rt-multi-thread"] }
