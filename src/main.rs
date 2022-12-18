@@ -24,21 +24,23 @@ use tokio::{
 use crate::cert_verifier::MutableWebPkiVerifier;
 
 pub struct MyIdentity {
+    certificate: Certificate,
     private_key: PrivateKey,
 }
 
 impl MyIdentity {
     pub async fn new(name: &str) -> anyhow::Result<Self> {
-        let filename = format!("private-key-{}.der", name);
+        let cert = rcgen::generate_simple_self_signed(vec![])?;
+
+        let private_filename = format!("private-key-{}.der", name);
         match OpenOptions::new()
             .create_new(true)
             .write(true)
-            .open(&filename)
+            .open(&private_filename)
             .await
         {
             Ok(mut file) => {
                 // TODO FIXME find out crypto algo
-                let cert = rcgen::generate_simple_self_signed(vec![])?;
                 file.write_all(&cert.serialize_private_key_der()).await?;
                 file.sync_all().await?;
             }
@@ -49,12 +51,39 @@ impl MyIdentity {
             }
         }
 
-        let mut file = OpenOptions::new().read(true).open(&filename).await?;
-        let mut buffer = Vec::new();
-        file.read_to_end(&mut buffer).await?;
+        let public_filename = format!("public-key-{}.der", name);
+        match OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&public_filename)
+            .await
+        {
+            Ok(mut file) => {
+                // TODO FIXME find out crypto algo
+                file.write_all(&cert.serialize_der()?).await?;
+                file.sync_all().await?;
+            }
+            Err(error) => {
+                if error.kind() != ErrorKind::AlreadyExists {
+                    Err(error)?;
+                }
+            }
+        }
+
+        let mut private_file = OpenOptions::new()
+            .read(true)
+            .open(&private_filename)
+            .await?;
+        let mut private_buffer = Vec::new();
+        private_file.read_to_end(&mut private_buffer).await?;
+
+        let mut public_file = OpenOptions::new().read(true).open(&public_filename).await?;
+        let mut public_buffer = Vec::new();
+        public_file.read_to_end(&mut public_buffer).await?;
 
         Ok(MyIdentity {
-            private_key: PrivateKey(buffer),
+            private_key: PrivateKey(private_buffer),
+            certificate: Certificate(public_buffer),
         })
     }
 }
@@ -97,7 +126,7 @@ async fn client() -> anyhow::Result<()> {
     let client_config = ClientConfig::builder()
         .with_safe_defaults()
         .with_custom_certificate_verifier(server_verifier)
-        .with_single_cert(vec![], identity.private_key)?;
+        .with_single_cert(vec![identity.certificate], identity.private_key)?;
 
     let mut endpoint = Endpoint::client(client_addr())?;
 
@@ -122,7 +151,7 @@ async fn server() -> anyhow::Result<()> {
     let server_config = ServerConfig::builder()
         .with_safe_defaults()
         .with_client_cert_verifier(client_cert_verifier)
-        .with_single_cert(vec![], identity.private_key)?;
+        .with_single_cert(vec![identity.certificate], identity.private_key)?;
 
     let endpoint = Endpoint::server(
         quinn::ServerConfig::with_crypto(Arc::new(server_config)),
