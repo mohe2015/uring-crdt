@@ -10,8 +10,11 @@ use std::{
     sync::{Arc, Mutex, RwLock},
 };
 
+use cert_verifier::MutableClientCertVerifier;
 use quinn::Endpoint;
-use rustls::{client::ServerCertVerifier, Certificate, ClientConfig, PrivateKey, RootCertStore};
+use rustls::{
+    client::ServerCertVerifier, Certificate, ClientConfig, PrivateKey, RootCertStore, ServerConfig,
+};
 use tokio::{
     fs::{File, OpenOptions},
     io::{AsyncReadExt, AsyncWriteExt},
@@ -24,11 +27,12 @@ pub struct MyIdentity {
 }
 
 impl MyIdentity {
-    pub async fn new() -> anyhow::Result<Self> {
+    pub async fn new(name: &str) -> anyhow::Result<Self> {
+        let filename = format!("private-key-{}.der", name);
         match OpenOptions::new()
             .create_new(true)
             .write(true)
-            .open("private-key.der")
+            .open(&filename)
             .await
         {
             Ok(mut file) => {
@@ -44,10 +48,7 @@ impl MyIdentity {
             }
         }
 
-        let mut file = OpenOptions::new()
-            .read(true)
-            .open("private-key.der")
-            .await?;
+        let mut file = OpenOptions::new().read(true).open(&filename).await?;
         let mut buffer = Vec::new();
         file.read_to_end(&mut buffer).await?;
 
@@ -79,6 +80,64 @@ fn server_addr() -> SocketAddr {
     "127.0.0.1:5001".parse::<SocketAddr>().unwrap()
 }
 
+async fn client() -> anyhow::Result<()> {
+    let identity = MyIdentity::new("client").await?;
+
+    let server_verifier: Arc<MutableWebPkiVerifier> = Arc::new(MutableWebPkiVerifier {
+        roots: RwLock::new(RootCertStore::empty()),
+    });
+
+    server_verifier
+        .roots
+        .write()
+        .unwrap()
+        .add_parsable_certificates(&Vec::new());
+
+    let client_config = ClientConfig::builder()
+        .with_safe_defaults()
+        .with_custom_certificate_verifier(server_verifier)
+        .with_single_cert(vec![], identity.private_key)?;
+
+    let mut endpoint = Endpoint::client(client_addr())?;
+
+    let connection = endpoint
+        .connect_with(
+            quinn::ClientConfig::new(Arc::new(client_config)),
+            server_addr(),
+            SERVER_NAME,
+        )?
+        .await?;
+
+    Ok(())
+}
+
+async fn server() -> anyhow::Result<()> {
+    let identity = MyIdentity::new("server").await?;
+
+    let client_cert_verifier = Arc::new(MutableClientCertVerifier {
+        roots: RwLock::new(RootCertStore::empty()),
+    });
+
+    let server_config = ServerConfig::builder()
+        .with_safe_defaults()
+        .with_client_cert_verifier(client_cert_verifier)
+        .with_single_cert(vec![], identity.private_key)?;
+
+    let endpoint = Endpoint::server(
+        quinn::ServerConfig::with_crypto(Arc::new(server_config)),
+        server_addr(),
+    )?;
+
+    // Start iterating over incoming connections.
+    while let Some(conn) = endpoint.accept().await {
+        let mut connection = conn.await?;
+
+        // Save connection somewhere, start transferring, receiving data, see DataTransfer tutorial.
+    }
+
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -86,36 +145,6 @@ fn main() -> anyhow::Result<()> {
         .unwrap()
         .block_on(async {
             println!("Hello world");
-
-            let identity = MyIdentity::new().await?;
-
-            let server_verifier: Arc<MutableWebPkiVerifier> = Arc::new(MutableWebPkiVerifier {
-                roots: RwLock::new(RootCertStore::empty()),
-            });
-
-            server_verifier
-                .roots
-                .write()
-                .unwrap()
-                .add_parsable_certificates(&Vec::new());
-
-            let client_config = ClientConfig::builder()
-                .with_safe_default_cipher_suites()
-                .with_safe_default_kx_groups()
-                .with_safe_default_protocol_versions()
-                .unwrap()
-                .with_custom_certificate_verifier(server_verifier)
-                .with_single_cert(vec![], identity.private_key)?;
-
-            let mut endpoint = Endpoint::client(client_addr())?;
-
-            let connection = endpoint
-                .connect_with(
-                    quinn::ClientConfig::new(Arc::new(client_config)),
-                    server_addr(),
-                    SERVER_NAME,
-                )?
-                .await?;
 
             Ok(())
         })

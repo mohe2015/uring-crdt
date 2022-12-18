@@ -1,7 +1,11 @@
-use std::{sync::{Mutex, RwLock}, time::SystemTime};
+use std::{
+    sync::{Mutex, RwLock},
+    time::SystemTime,
+};
 
 use rustls::{
     client::{ServerCertVerified, ServerCertVerifier, WebPkiVerifier},
+    server::{AllowAnyAuthenticatedClient, ClientCertVerifier},
     Certificate, Error, RootCertStore, ServerName,
 };
 
@@ -25,6 +29,30 @@ impl ServerCertVerifier for MutableWebPkiVerifier {
             server_name,
             scts,
             ocsp_response,
+            now,
+        )
+    }
+}
+
+pub struct MutableClientCertVerifier {
+    pub roots: RwLock<RootCertStore>,
+}
+
+impl ClientCertVerifier for MutableClientCertVerifier {
+    fn client_auth_root_subjects(&self) -> Option<rustls::DistinguishedNames> {
+        AllowAnyAuthenticatedClient::new(self.roots.read().unwrap().to_owned())
+            .client_auth_root_subjects()
+    }
+
+    fn verify_client_cert(
+        &self,
+        end_entity: &Certificate,
+        intermediates: &[Certificate],
+        now: SystemTime,
+    ) -> Result<rustls::server::ClientCertVerified, Error> {
+        AllowAnyAuthenticatedClient::new(self.roots.read().unwrap().to_owned()).verify_client_cert(
+            end_entity,
+            intermediates,
             now,
         )
     }
