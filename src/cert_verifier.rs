@@ -20,7 +20,6 @@ impl ServerCertVerifier for MutableWebPkiVerifier {
         ocsp_response: &[u8],
         now: SystemTime,
     ) -> Result<ServerCertVerified, Error> {
-        println!("{:?}", server_name);
         WebPkiVerifier::new(self.roots.read().unwrap().to_owned(), None).verify_server_cert(
             end_entity,
             intermediates,
@@ -28,8 +27,7 @@ impl ServerCertVerifier for MutableWebPkiVerifier {
             scts,
             ocsp_response,
             now,
-        )?;
-        Ok(ServerCertVerified::assertion())
+        )
     }
 }
 

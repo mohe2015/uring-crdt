@@ -93,13 +93,18 @@ async fn client() -> anyhow::Result<()> {
 
     let endpoint = Endpoint::client(client_addr())?;
 
-    let _connection = endpoint
+    let connection = endpoint
         .connect_with(
             quinn::ClientConfig::new(Arc::new(client_config)),
             server_addr(),
             SERVER_NAME,
         )?
         .await?;
+
+    let (mut send, mut recv) = connection.open_bi().await?;
+
+    send.write_all(b"this was sent over quic").await?;
+    send.finish().await?;
 
     Ok(())
 }
@@ -133,9 +138,16 @@ async fn server() -> anyhow::Result<()> {
 
     // Start iterating over incoming connections.
     while let Some(conn) = endpoint.accept().await {
-        let _connection = conn.await?;
+        let connection = conn.await?;
 
         println!("connected!");
+
+        let (mut send, mut recv) = connection.accept_bi().await?;
+
+        let mut string = String::new();
+        recv.read_to_string(&mut string).await?;
+
+        println!("server gotr \"{}\" in {:?}", string, recv.id())
 
         // Save connection somewhere, start transferring, receiving data, see DataTransfer tutorial.
     }
