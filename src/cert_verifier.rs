@@ -1,12 +1,12 @@
-use std::time::SystemTime;
+use std::{sync::{Mutex, RwLock}, time::SystemTime};
 
 use rustls::{
-    client::{ResolvesClientCert, ServerCertVerified, ServerCertVerifier, WebPkiVerifier},
+    client::{ServerCertVerified, ServerCertVerifier, WebPkiVerifier},
     Certificate, Error, RootCertStore, ServerName,
 };
 
 pub struct MutableWebPkiVerifier {
-    roots: RootCertStore,
+    pub roots: RwLock<RootCertStore>,
 }
 
 impl ServerCertVerifier for MutableWebPkiVerifier {
@@ -19,7 +19,7 @@ impl ServerCertVerifier for MutableWebPkiVerifier {
         ocsp_response: &[u8],
         now: SystemTime,
     ) -> Result<ServerCertVerified, Error> {
-        WebPkiVerifier::new(self.roots.to_owned(), None).verify_server_cert(
+        WebPkiVerifier::new(self.roots.read().unwrap().to_owned(), None).verify_server_cert(
             end_entity,
             intermediates,
             server_name,

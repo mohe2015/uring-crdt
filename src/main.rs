@@ -3,7 +3,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 mod cert_verifier;
 
-use std::{error::Error, io::ErrorKind, net::SocketAddr, sync::Arc};
+use std::{
+    error::Error,
+    io::ErrorKind,
+    net::SocketAddr,
+    sync::{Arc, Mutex, RwLock},
+};
 
 use quinn::Endpoint;
 use rustls::{client::ServerCertVerifier, Certificate, ClientConfig, PrivateKey, RootCertStore};
@@ -12,7 +17,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
 };
 
-use crate::cert_verifier::{MutableResolvesClientCert, MutableWebPkiVerifier};
+use crate::cert_verifier::MutableWebPkiVerifier;
 
 pub struct MyIdentity {
     private_key: PrivateKey,
@@ -84,9 +89,15 @@ fn main() -> anyhow::Result<()> {
 
             let identity = MyIdentity::new().await?;
 
-            let server_verifier: Arc<dyn ServerCertVerifier> = Arc::new(MutableWebPkiVerifier {
-                roots: RootCertStore::empty(),
+            let server_verifier: Arc<MutableWebPkiVerifier> = Arc::new(MutableWebPkiVerifier {
+                roots: RwLock::new(RootCertStore::empty()),
             });
+
+            server_verifier
+                .roots
+                .write()
+                .unwrap()
+                .add_parsable_certificates(&Vec::new());
 
             let client_config = ClientConfig::builder()
                 .with_safe_default_cipher_suites()
@@ -98,7 +109,6 @@ fn main() -> anyhow::Result<()> {
 
             let mut endpoint = Endpoint::client(client_addr())?;
 
-            // Connect to the server passing in the server name which is supposed to be in the server certificate.
             let connection = endpoint
                 .connect_with(
                     quinn::ClientConfig::new(Arc::new(client_config)),
