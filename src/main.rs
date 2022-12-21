@@ -8,6 +8,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use bytes::Bytes;
 use cert_verifier::MutableClientCertVerifier;
 use futures_util::future::try_join;
 use quinn::Endpoint;
@@ -101,10 +102,17 @@ async fn client() -> anyhow::Result<()> {
         )?
         .await?;
 
+    connection.send_datagram(Bytes::from("this is a datagram"))?;
+
     let (mut send, mut recv) = connection.open_bi().await?;
 
     send.write_all(b"this was sent over quic").await?;
     send.finish().await?;
+
+    let mut string = String::new();
+    recv.read_to_string(&mut string).await?;
+
+    println!("client got \"{}\" in {:?}", string, recv.id());
 
     Ok(())
 }
@@ -142,12 +150,20 @@ async fn server() -> anyhow::Result<()> {
 
         println!("connected!");
 
+        let datagram = connection.read_datagram().await?;
+
+        println!("datagram {}", std::str::from_utf8(&datagram).unwrap());
+
         let (mut send, mut recv) = connection.accept_bi().await?;
 
         let mut string = String::new();
         recv.read_to_string(&mut string).await?;
 
-        println!("server gotr \"{}\" in {:?}", string, recv.id())
+        println!("server got \"{}\" in {:?}", string, recv.id());
+
+        send.write_all(b"server responded").await?;
+
+        send.finish().await?;
 
         // Save connection somewhere, start transferring, receiving data, see DataTransfer tutorial.
     }

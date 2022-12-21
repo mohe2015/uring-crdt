@@ -16,3 +16,4 @@ tokio = { version = "1", features = ["fs", "io-util", "rt-multi-thread"] }
 anyhow = { version = "1" }
 webpki = { version = "0.22" }
 futures-util = { version = "0.3" }
+bytes = { version = "1" }
