@@ -17,3 +17,7 @@ anyhow = { version = "1" }
 webpki = { version = "0.22" }
 futures-util = { version = "0.3" }
 bytes = { version = "1" }
+tokio-util = { version = "0.7", features = ["codec"] }
+serde_json = { version = "1" }
+thiserror = { version = "1" }
+serde = { version = "1" }

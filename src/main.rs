@@ -2,24 +2,31 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 mod cert_verifier;
+mod async_serde;
 
 use std::{
     net::SocketAddr,
-    sync::{Arc, RwLock},
+    sync::{Arc, RwLock}, marker::PhantomData,
 };
 
+use async_serde::Codec;
 use bytes::Bytes;
 use cert_verifier::MutableClientCertVerifier;
-use futures_util::future::try_join;
+use futures_util::{future::try_join, Stream};
 use quinn::Endpoint;
 use rustls::{Certificate, ClientConfig, PrivateKey, RootCertStore, ServerConfig};
+use serde::de::DeserializeOwned;
+use serde_json::StreamDeserializer;
 use tokio::{
     fs::{File, OpenOptions},
     io::{AsyncReadExt, AsyncWriteExt},
 };
+use tokio_util::codec::{Decoder, FramedRead};
 
 use crate::cert_verifier::MutableWebPkiVerifier;
 
+// https://briansmith.org/rustdoc/ring/digest/index.html
+// https://briansmith.org/rustdoc/ring/signature/index.html
 pub struct MyIdentity {
     certificate: Certificate,
     private_key: PrivateKey,
@@ -48,15 +55,54 @@ impl MyIdentity {
     }
 }
 
-pub struct CmRDT {
-    file: File,
+// our operation needs to be commutative
+// if we want to store the entries in a non-deterministic order but still ordered by causality
+// this needs to merge correctly
+
+pub struct CmRDTEntry<T: DeserializeOwned> {
+    value: T,
+    predecessors: Vec<String>,
+    author: String,
+    nonce: String,
+    signature: String
 }
 
-impl CmRDT {
+impl<T: DeserializeOwned> CmRDTEntry<T> {
+    pub fn new(value: T) -> Self {
+        Self {
+            value,
+            predecessors: Vec::new(),
+            author: "".to_string(),
+            nonce: "".to_string(),
+            signature: "".to_string(),
+        }
+    }
+}
+
+pub struct CmRDT<T: DeserializeOwned> {
+    file: File,
+    phantom: PhantomData<T>
+}
+
+// hash index
+// https://en.wikipedia.org/wiki/Extendible_hashing
+
+// https://docs.rs/tokio-util/latest/tokio_util/codec/index.html
+// https://github.com/bincode-org/bincode
+// https://docs.rs/serde_json/latest/serde_json/struct.StreamDeserializer.html
+
+// https://github.com/serde-rs/json/issues/575
+
+impl<T: DeserializeOwned> CmRDT<T> {
     pub async fn new() -> anyhow::Result<Self> {
         Ok(Self {
             file: File::open("hello.txt").await?,
+            phantom: PhantomData
         })
+    }
+
+    pub async fn stream(self) -> impl Stream<Item = Result<T, async_serde::Error>> {
+        FramedRead::new(self.file, Codec::<T>::new())
     }
 }
 
