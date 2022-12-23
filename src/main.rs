@@ -6,22 +6,22 @@ mod async_serde;
 
 use std::{
     net::SocketAddr,
-    sync::{Arc, RwLock}, marker::PhantomData,
+    sync::{Arc, RwLock}, marker::PhantomData, io::SeekFrom,
 };
 
 use async_serde::Codec;
 use bytes::Bytes;
 use cert_verifier::MutableClientCertVerifier;
-use futures_util::{future::try_join, Stream};
+use futures::{SinkExt, future::try_join};
 use quinn::Endpoint;
 use rustls::{Certificate, ClientConfig, PrivateKey, RootCertStore, ServerConfig};
-use serde::de::DeserializeOwned;
+use serde::{de::DeserializeOwned, Serialize, Deserialize};
 use serde_json::StreamDeserializer;
 use tokio::{
     fs::{File, OpenOptions},
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncWriteExt, AsyncSeekExt},
 };
-use tokio_util::codec::{Decoder, FramedRead};
+use tokio_util::codec::{Decoder, FramedRead, FramedWrite, Framed};
 
 use crate::cert_verifier::MutableWebPkiVerifier;
 
@@ -55,11 +55,13 @@ impl MyIdentity {
     }
 }
 
+
 // our operation needs to be commutative
 // if we want to store the entries in a non-deterministic order but still ordered by causality
 // this needs to merge correctly
 
-pub struct CmRDTEntry<T: DeserializeOwned> {
+#[derive(Serialize, Deserialize)]
+pub struct CmRDTEntry<T> {
     value: T,
     predecessors: Vec<String>,
     author: String,
@@ -67,7 +69,7 @@ pub struct CmRDTEntry<T: DeserializeOwned> {
     signature: String
 }
 
-impl<T: DeserializeOwned> CmRDTEntry<T> {
+impl<T> CmRDTEntry<T> {
     pub fn new(value: T) -> Self {
         Self {
             value,
@@ -79,9 +81,25 @@ impl<T: DeserializeOwned> CmRDTEntry<T> {
     }
 }
 
-pub struct CmRDT<T: DeserializeOwned> {
-    file: File,
-    phantom: PhantomData<T>
+trait Commutative {
+    type Entry;
+}
+
+pub struct PositiveNegativeCounterEntry(i64);
+
+
+pub struct PositiveNegativeCounter;
+
+impl PositiveNegativeCounter {
+    pub fn new() -> Self {
+        Self {
+
+        }
+    }
+
+    pub fn change_by(diff: i64) -> PositiveNegativeCounterEntry {
+        PositiveNegativeCounterEntry(diff)
+    }
 }
 
 // hash index
@@ -93,16 +111,24 @@ pub struct CmRDT<T: DeserializeOwned> {
 
 // https://github.com/serde-rs/json/issues/575
 
-impl<T: DeserializeOwned> CmRDT<T> {
+pub struct CmRDT<T> {
+    framed: Framed<File, Codec::<CmRDTEntry<T>>>,
+}
+
+impl<T: Serialize> CmRDT<T> {
     pub async fn new() -> anyhow::Result<Self> {
+        let file = File::open("hello.txt").await?;
+        let framed = Framed::new(file, Codec::new());
         Ok(Self {
-            file: File::open("hello.txt").await?,
-            phantom: PhantomData
+            framed
         })
     }
 
-    pub async fn stream(self) -> impl Stream<Item = Result<T, async_serde::Error>> {
-        FramedRead::new(self.file, Codec::<T>::new())
+    pub async fn write_entry(&mut self, entry: CmRDTEntry<T>) -> anyhow::Result<()> {
+        let file = self.framed.get_mut();
+        file.seek(SeekFrom::End(0)).await?;
+        self.framed.send(entry).await?;
+        Ok(())
     }
 }
 
