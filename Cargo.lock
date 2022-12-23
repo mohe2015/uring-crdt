@@ -655,6 +655,7 @@ dependencies = [
  "bytes",
  "futures",
  "quinn",
+ "ring",
  "rustls",
  "serde",
  "serde_json",

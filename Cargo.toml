@@ -21,3 +21,4 @@ tokio-util = { version = "0.7", features = ["codec"] }
 serde_json = { version = "1" }
 thiserror = { version = "1" }
 serde = { version = "1", features = ["derive"] }
+ring = { version = "0.16" }
