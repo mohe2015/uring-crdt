@@ -1,27 +1,29 @@
 // SPDX-FileCopyrightText: 2022 Moritz Hedtke <Moritz.Hedtke@t-online.de>
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
-mod cert_verifier;
 mod async_serde;
+mod cert_verifier;
 
 use std::{
+    io::SeekFrom,
+    marker::PhantomData,
     net::SocketAddr,
-    sync::{Arc, RwLock}, marker::PhantomData, io::SeekFrom,
+    sync::{Arc, RwLock},
 };
 
 use async_serde::Codec;
 use bytes::Bytes;
 use cert_verifier::MutableClientCertVerifier;
-use futures::{SinkExt, future::try_join};
+use futures::{future::try_join, SinkExt};
 use quinn::Endpoint;
 use rustls::{Certificate, ClientConfig, PrivateKey, RootCertStore, ServerConfig};
-use serde::{de::DeserializeOwned, Serialize, Deserialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::StreamDeserializer;
 use tokio::{
     fs::{File, OpenOptions},
-    io::{AsyncReadExt, AsyncWriteExt, AsyncSeekExt},
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
-use tokio_util::codec::{Decoder, FramedRead, FramedWrite, Framed};
+use tokio_util::codec::{Decoder, Framed, FramedRead, FramedWrite};
 
 use crate::cert_verifier::MutableWebPkiVerifier;
 
@@ -55,7 +57,6 @@ impl MyIdentity {
     }
 }
 
-
 // our operation needs to be commutative
 // if we want to store the entries in a non-deterministic order but still ordered by causality
 // this needs to merge correctly
@@ -66,7 +67,7 @@ pub struct CmRDTEntry<T> {
     predecessors: Vec<String>,
     author: String,
     nonce: String,
-    signature: String
+    signature: String,
 }
 
 impl<T> CmRDTEntry<T> {
@@ -85,16 +86,14 @@ trait Commutative {
     type Entry;
 }
 
+#[derive(Serialize)]
 pub struct PositiveNegativeCounterEntry(i64);
-
 
 pub struct PositiveNegativeCounter;
 
 impl PositiveNegativeCounter {
     pub fn new() -> Self {
-        Self {
-
-        }
+        Self {}
     }
 
     pub fn change_by(diff: i64) -> PositiveNegativeCounterEntry {
@@ -112,16 +111,18 @@ impl PositiveNegativeCounter {
 // https://github.com/serde-rs/json/issues/575
 
 pub struct CmRDT<T> {
-    framed: Framed<File, Codec::<CmRDTEntry<T>>>,
+    framed: Framed<File, Codec<CmRDTEntry<T>>>,
 }
 
 impl<T: Serialize> CmRDT<T> {
     pub async fn new() -> anyhow::Result<Self> {
-        let file = File::open("hello.txt").await?;
+        let file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open("hello.txt")
+            .await?;
         let framed = Framed::new(file, Codec::new());
-        Ok(Self {
-            framed
-        })
+        Ok(Self { framed })
     }
 
     pub async fn write_entry(&mut self, entry: CmRDTEntry<T>) -> anyhow::Result<()> {
@@ -253,7 +254,18 @@ fn main() -> anyhow::Result<()> {
 
             //server().await?;
 
-            let _result = try_join(client(), server()).await?;
+            let mut crdt = CmRDT::<PositiveNegativeCounterEntry>::new().await?;
+
+            crdt.write_entry(CmRDTEntry::<PositiveNegativeCounterEntry> {
+                value: PositiveNegativeCounterEntry(1),
+                predecessors: Vec::new(),
+                author: String::new(),
+                nonce: String::new(),
+                signature: String::new(),
+            })
+            .await?;
+
+            //let _result = try_join(client(), server()).await?;
 
             Ok(())
         })
