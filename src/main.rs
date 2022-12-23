@@ -66,10 +66,10 @@ impl MyIdentity {
 #[derive(Serialize, Deserialize)]
 pub struct CmRDTEntry<T> {
     value: T,
-    predecessors: Vec<String>,
-    author: String,
+    predecessors: Vec<Vec<u8>>,
+    author: Vec<u8>,
     //nonce: String, // do we need this or is idempotency without it easier?
-    signature: String,
+    signature: Vec<u8>,
 }
 
 impl<T> CmRDTEntry<T> {
@@ -121,10 +121,10 @@ impl<T: Serialize> CmRDT<T> {
 
     pub async fn write_entry(
         &mut self,
-        author: MyIdentity,
+        author: &MyIdentity,
         entry: T,
-        predecessors: Vec<String>,
-    ) -> anyhow::Result<()> {
+        predecessors: Vec<Vec<u8>>,
+    ) -> anyhow::Result<Vec<u8>> {
         let entry_json = serde_json::to_string(&entry)?;
         let predecessors_json = serde_json::to_string(&predecessors)?;
 
@@ -152,14 +152,14 @@ impl<T: Serialize> CmRDT<T> {
         let crdt_entry = CmRDTEntry {
             value: entry_json,
             predecessors,
-            author: todo!(),
-            signature: todo!(),
-        };     
+            author: author.certificate.0.to_owned(),
+            signature: multi_part.as_ref().to_vec(),
+        };
 
         let file = self.framed.get_mut();
         file.seek(SeekFrom::End(0)).await?;
-        self.framed.send(entry).await?;
-        Ok(())
+        self.framed.send(crdt_entry).await?;
+        Ok(multi_part.as_ref().to_vec())
     }
 }
 
@@ -288,8 +288,8 @@ fn main() -> anyhow::Result<()> {
 
             let mut crdt = CmRDT::<PositiveNegativeCounterEntry>::new().await?;
 
-            crdt.write_entry(client_identity, PositiveNegativeCounterEntry(1), vec![])
-            .await?;
+            let entry0 = crdt.write_entry(&client_identity, PositiveNegativeCounterEntry(1), vec![]).await?;
+            let entry1 = crdt.write_entry(&client_identity, PositiveNegativeCounterEntry(1), vec![entry0]).await?;
 
             //let _result = try_join(client(), server()).await?;
 
