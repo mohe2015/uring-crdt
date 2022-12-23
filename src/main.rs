@@ -16,7 +16,7 @@ use bytes::Bytes;
 use cert_verifier::MutableClientCertVerifier;
 use futures::{future::try_join, SinkExt};
 use quinn::Endpoint;
-use ring::signature::{Ed25519KeyPair, KeyPair, ED25519, UnparsedPublicKey};
+use ring::signature::{Ed25519KeyPair, KeyPair, UnparsedPublicKey, ED25519};
 use rustls::{Certificate, ClientConfig, PrivateKey, RootCertStore, ServerConfig};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::StreamDeserializer;
@@ -126,9 +126,15 @@ impl<T: Serialize> CmRDT<T> {
         Ok(Self { framed })
     }
 
-    pub async fn write_entry(&mut self, author: MyIdentity, entry: T, predecessors: Vec<String>) -> anyhow::Result<()> {
+    pub async fn write_entry(
+        &mut self,
+        author: MyIdentity,
+        entry: T,
+        predecessors: Vec<String>,
+    ) -> anyhow::Result<()> {
         let value = serde_json::to_string(&entry)?;
-        let key_pair = Ed25519KeyPair::from_pkcs8(&author.private_key.0)?;
+        let key_pair = Ed25519KeyPair::from_pkcs8(&author.private_key.0)
+            .map_err(|err| anyhow::anyhow!("{}", err))?;
         let sig = key_pair.sign(value.as_bytes());
 
         let peer_public_key_bytes = key_pair.public_key().as_ref();
@@ -136,9 +142,10 @@ impl<T: Serialize> CmRDT<T> {
         // Verify the signature of the message using the public key. Normally the
         // verifier of the message would parse the inputs to this code out of the
         // protocol message(s) sent by the signer.
-        let peer_public_key =
-            UnparsedPublicKey::new(&ED25519, peer_public_key_bytes);
-        peer_public_key.verify(value.as_bytes(), sig.as_ref())?;
+        let peer_public_key = UnparsedPublicKey::new(&ED25519, peer_public_key_bytes);
+        peer_public_key
+            .verify(value.as_bytes(), sig.as_ref())
+            .map_err(|err| anyhow::anyhow!("{}", err))?;
 
         let file = self.framed.get_mut();
         file.seek(SeekFrom::End(0)).await?;
