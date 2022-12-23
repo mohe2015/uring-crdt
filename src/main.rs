@@ -16,7 +16,7 @@ use bytes::Bytes;
 use cert_verifier::MutableClientCertVerifier;
 use futures::{future::try_join, SinkExt};
 use quinn::Endpoint;
-use ring::signature::{Ed25519KeyPair, KeyPair, UnparsedPublicKey, ED25519};
+use ring::{signature::{Ed25519KeyPair, KeyPair, UnparsedPublicKey, ED25519}, digest::{Context, SHA512}};
 use rustls::{Certificate, ClientConfig, PrivateKey, RootCertStore, ServerConfig};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::StreamDeserializer;
@@ -133,9 +133,14 @@ impl<T: Serialize> CmRDT<T> {
         predecessors: Vec<String>,
     ) -> anyhow::Result<()> {
         let value = serde_json::to_string(&entry)?;
+
+        let mut ctx = Context::new(&SHA512);
+        ctx.update(value.as_bytes());
+        let multi_part = ctx.finish();
+
         let key_pair = Ed25519KeyPair::from_pkcs8(&author.private_key.0)
             .map_err(|err| anyhow::anyhow!("{}", err))?;
-        let sig = key_pair.sign(value.as_bytes());
+        let sig = key_pair.sign(multi_part.as_ref());
 
         let peer_public_key_bytes = key_pair.public_key().as_ref();
 
@@ -144,7 +149,7 @@ impl<T: Serialize> CmRDT<T> {
         // protocol message(s) sent by the signer.
         let peer_public_key = UnparsedPublicKey::new(&ED25519, peer_public_key_bytes);
         peer_public_key
-            .verify(value.as_bytes(), sig.as_ref())
+            .verify(multi_part.as_ref(), sig.as_ref())
             .map_err(|err| anyhow::anyhow!("{}", err))?;
 
         let file = self.framed.get_mut();
@@ -275,15 +280,11 @@ fn main() -> anyhow::Result<()> {
 
             //server().await?;
 
+            let client_identity = MyIdentity::new("client").await?;
+
             let mut crdt = CmRDT::<PositiveNegativeCounterEntry>::new().await?;
 
-            crdt.write_entry(CmRDTEntry::<PositiveNegativeCounterEntry> {
-                value: PositiveNegativeCounterEntry(1),
-                predecessors: Vec::new(),
-                author: String::new(),
-                nonce: String::new(),
-                signature: String::new(),
-            })
+            crdt.write_entry(client_identity, PositiveNegativeCounterEntry(1), vec![])
             .await?;
 
             //let _result = try_join(client(), server()).await?;
