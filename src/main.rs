@@ -35,6 +35,7 @@ pub struct MyIdentity {
     private_key: PrivateKey,
 }
 
+// TODO FIXME is it safe to use for tls and signing?
 impl MyIdentity {
     pub async fn new(name: &str) -> anyhow::Result<Self> {
         let private_filename = format!("{name}-key.der");
@@ -67,20 +68,12 @@ pub struct CmRDTEntry<T> {
     value: T,
     predecessors: Vec<String>,
     author: String,
-    nonce: String,
+    //nonce: String, // do we need this or is idempotency without it easier?
     signature: String,
 }
 
 impl<T> CmRDTEntry<T> {
-    pub fn new(value: T) -> Self {
-        Self {
-            value,
-            predecessors: Vec::new(),
-            author: "".to_string(),
-            nonce: "".to_string(),
-            signature: "".to_string(),
-        }
-    }
+    
 }
 
 trait Commutative {
@@ -132,13 +125,17 @@ impl<T: Serialize> CmRDT<T> {
         entry: T,
         predecessors: Vec<String>,
     ) -> anyhow::Result<()> {
-        let value = serde_json::to_string(&entry)?;
+        let entry_json = serde_json::to_string(&entry)?;
+        let predecessors_json = serde_json::to_string(&predecessors)?;
 
         let mut ctx = Context::new(&SHA512);
-        ctx.update(value.as_bytes());
+        ctx.update(entry_json.as_bytes());
+        ctx.update(predecessors_json.as_bytes());
+        ctx.update(&author.certificate.0);
         let multi_part = ctx.finish();
 
-        let key_pair = Ed25519KeyPair::from_pkcs8(&author.private_key.0)
+        // TODO FIXME this is dangerous - regenerate public key from private key
+        let key_pair = Ed25519KeyPair::from_pkcs8_maybe_unchecked(&author.private_key.0)
             .map_err(|err| anyhow::anyhow!("{}", err))?;
         let sig = key_pair.sign(multi_part.as_ref());
 
@@ -151,6 +148,13 @@ impl<T: Serialize> CmRDT<T> {
         peer_public_key
             .verify(multi_part.as_ref(), sig.as_ref())
             .map_err(|err| anyhow::anyhow!("{}", err))?;
+
+        let crdt_entry = CmRDTEntry {
+            value: entry_json,
+            predecessors,
+            author: todo!(),
+            signature: todo!(),
+        };     
 
         let file = self.framed.get_mut();
         file.seek(SeekFrom::End(0)).await?;
