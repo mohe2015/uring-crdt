@@ -1,24 +1,298 @@
 // SPDX-FileCopyrightText: 2022 Moritz Hedtke <Moritz.Hedtke@t-online.de>
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
+mod async_serde;
+mod cert_verifier;
 
-use tokio_uring::fs::File;
+use std::{
+    io::SeekFrom,
+    marker::PhantomData,
+    net::SocketAddr,
+    sync::{Arc, RwLock},
+};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tokio_uring::start(async {
-        // Open a file
-        let file = File::open("hello.txt").await?;
+use async_serde::Codec;
+use bytes::Bytes;
+use cert_verifier::MutableClientCertVerifier;
+use futures::{future::try_join, SinkExt};
+use quinn::Endpoint;
+use ring::{signature::{Ed25519KeyPair, KeyPair, UnparsedPublicKey, ED25519}, digest::{Context, SHA512}};
+use rustls::{Certificate, ClientConfig, PrivateKey, RootCertStore, ServerConfig};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde_json::StreamDeserializer;
+use tokio::{
+    fs::{File, OpenOptions},
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
+};
+use tokio_util::codec::{Decoder, Framed, FramedRead, FramedWrite};
 
-        let buf = vec![0; 4096];
-        // Read some data, the buffer is passed by ownership and
-        // submitted to the kernel. When the operation completes,
-        // we get the buffer back.
-        let (res, buf) = file.read_at(buf, 0).await;
-        let n = res?;
+use crate::cert_verifier::MutableWebPkiVerifier;
 
-        // Display the contents
-        println!("{:?}", &buf[..n]);
+// https://docs.rs/ring/latest/ring/digest/index.html
+// https://docs.rs/ring/latest/ring/signature/index.html
+pub struct MyIdentity {
+    certificate: Certificate,
+    private_key: PrivateKey,
+}
 
-        Ok(())
-    })
+// TODO FIXME is it safe to use for tls and signing?
+impl MyIdentity {
+    pub async fn new(name: &str) -> anyhow::Result<Self> {
+        let private_filename = format!("{name}-key.der");
+        let public_filename = format!("{name}-cert.der");
+
+        let mut private_file = OpenOptions::new()
+            .read(true)
+            .open(&private_filename)
+            .await?;
+        let mut private_buffer = Vec::new();
+        private_file.read_to_end(&mut private_buffer).await?;
+
+        let mut public_file = OpenOptions::new().read(true).open(&public_filename).await?;
+        let mut public_buffer = Vec::new();
+        public_file.read_to_end(&mut public_buffer).await?;
+
+        Ok(MyIdentity {
+            private_key: PrivateKey(private_buffer),
+            certificate: Certificate(public_buffer),
+        })
+    }
+}
+
+// our operation needs to be commutative
+// if we want to store the entries in a non-deterministic order but still ordered by causality
+// this needs to merge correctly
+
+#[derive(Serialize, Deserialize)]
+pub struct CmRDTEntry<T> {
+    value: T,
+    predecessors: Vec<Vec<u8>>,
+    author: Vec<u8>,
+    //nonce: String, // do we need this or is idempotency without it easier?
+    signature: Vec<u8>,
+}
+
+impl<T> CmRDTEntry<T> {
+    
+}
+
+trait Commutative {
+    type Entry;
+}
+
+#[derive(Serialize)]
+pub struct PositiveNegativeCounterEntry(i64);
+
+pub struct PositiveNegativeCounter;
+
+impl PositiveNegativeCounter {
+    pub fn new() -> Self {
+        Self {}
+    }
+
+    pub fn change_by(diff: i64) -> PositiveNegativeCounterEntry {
+        PositiveNegativeCounterEntry(diff)
+    }
+}
+
+// hash index
+// https://en.wikipedia.org/wiki/Extendible_hashing
+
+// https://docs.rs/tokio-util/latest/tokio_util/codec/index.html
+// https://github.com/bincode-org/bincode
+// https://docs.rs/serde_json/latest/serde_json/struct.StreamDeserializer.html
+
+// https://github.com/serde-rs/json/issues/575
+
+pub struct CmRDT<T> {
+    framed: Framed<File, Codec<CmRDTEntry<T>>>,
+}
+
+impl<T: Serialize> CmRDT<T> {
+    pub async fn new() -> anyhow::Result<Self> {
+        let file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open("hello.txt")
+            .await?;
+        let framed = Framed::new(file, Codec::new());
+        Ok(Self { framed })
+    }
+
+    pub async fn write_entry(
+        &mut self,
+        author: &MyIdentity,
+        entry: T,
+        predecessors: Vec<Vec<u8>>,
+    ) -> anyhow::Result<Vec<u8>> {
+        let entry_json = serde_json::to_string(&entry)?;
+        let predecessors_json = serde_json::to_string(&predecessors)?;
+
+        let mut ctx = Context::new(&SHA512);
+        ctx.update(entry_json.as_bytes());
+        ctx.update(predecessors_json.as_bytes());
+        ctx.update(&author.certificate.0);
+        let multi_part = ctx.finish();
+
+        // TODO FIXME this is dangerous - regenerate public key from private key
+        let key_pair = Ed25519KeyPair::from_pkcs8_maybe_unchecked(&author.private_key.0)
+            .map_err(|err| anyhow::anyhow!("{}", err))?;
+        let sig = key_pair.sign(multi_part.as_ref());
+
+        let peer_public_key_bytes = key_pair.public_key().as_ref();
+
+        // Verify the signature of the message using the public key. Normally the
+        // verifier of the message would parse the inputs to this code out of the
+        // protocol message(s) sent by the signer.
+        let peer_public_key = UnparsedPublicKey::new(&ED25519, peer_public_key_bytes);
+        peer_public_key
+            .verify(multi_part.as_ref(), sig.as_ref())
+            .map_err(|err| anyhow::anyhow!("{}", err))?;
+
+        let crdt_entry = CmRDTEntry {
+            value: entry_json,
+            predecessors,
+            author: author.certificate.0.to_owned(),
+            signature: multi_part.as_ref().to_vec(),
+        };
+
+        let file = self.framed.get_mut();
+        file.seek(SeekFrom::End(0)).await?;
+        self.framed.send(crdt_entry).await?;
+        Ok(multi_part.as_ref().to_vec())
+    }
+}
+
+static SERVER_NAME: &str = "example.org";
+
+fn client_addr() -> SocketAddr {
+    "127.0.0.1:5000".parse::<SocketAddr>().unwrap()
+}
+
+fn server_addr() -> SocketAddr {
+    "127.0.0.1:5001".parse::<SocketAddr>().unwrap()
+}
+
+async fn client() -> anyhow::Result<()> {
+    let client_identity = MyIdentity::new("client").await?;
+    let server_identity = MyIdentity::new("server").await?;
+
+    let server_verifier: Arc<MutableWebPkiVerifier> = Arc::new(MutableWebPkiVerifier {
+        roots: RwLock::new(RootCertStore::empty()),
+    });
+
+    server_verifier
+        .roots
+        .write()
+        .unwrap()
+        .add(&server_identity.certificate)?;
+
+    let client_config = ClientConfig::builder()
+        .with_safe_defaults()
+        .with_custom_certificate_verifier(server_verifier)
+        .with_single_cert(
+            vec![client_identity.certificate],
+            client_identity.private_key,
+        )?;
+
+    let endpoint = Endpoint::client(client_addr())?;
+
+    let connection = endpoint
+        .connect_with(
+            quinn::ClientConfig::new(Arc::new(client_config)),
+            server_addr(),
+            SERVER_NAME,
+        )?
+        .await?;
+
+    connection.send_datagram(Bytes::from("this is a datagram"))?;
+
+    let (mut send, mut recv) = connection.open_bi().await?;
+
+    send.write_all(b"this was sent over quic").await?;
+    send.finish().await?;
+
+    let mut string = String::new();
+    recv.read_to_string(&mut string).await?;
+
+    println!("client got \"{}\" in {:?}", string, recv.id());
+
+    Ok(())
+}
+
+async fn server() -> anyhow::Result<()> {
+    let server_identity = MyIdentity::new("server").await?;
+    let client_identity = MyIdentity::new("client").await?;
+
+    let client_cert_verifier = Arc::new(MutableClientCertVerifier {
+        roots: RwLock::new(RootCertStore::empty()),
+    });
+
+    client_cert_verifier
+        .roots
+        .write()
+        .unwrap()
+        .add(&client_identity.certificate)?;
+
+    let server_config = ServerConfig::builder()
+        .with_safe_defaults()
+        .with_client_cert_verifier(client_cert_verifier)
+        .with_single_cert(
+            vec![server_identity.certificate],
+            server_identity.private_key,
+        )?;
+
+    let endpoint = Endpoint::server(
+        quinn::ServerConfig::with_crypto(Arc::new(server_config)),
+        server_addr(),
+    )?;
+
+    // Start iterating over incoming connections.
+    while let Some(conn) = endpoint.accept().await {
+        let connection = conn.await?;
+
+        println!("connected!");
+
+        let datagram = connection.read_datagram().await?;
+
+        println!("datagram {}", std::str::from_utf8(&datagram).unwrap());
+
+        let (mut send, mut recv) = connection.accept_bi().await?;
+
+        let mut string = String::new();
+        recv.read_to_string(&mut string).await?;
+
+        println!("server got \"{}\" in {:?}", string, recv.id());
+
+        send.write_all(b"server responded").await?;
+
+        send.finish().await?;
+
+        // Save connection somewhere, start transferring, receiving data, see DataTransfer tutorial.
+    }
+
+    Ok(())
+}
+
+fn main() -> anyhow::Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            println!("Hello world");
+
+            //server().await?;
+
+            let client_identity = MyIdentity::new("client").await?;
+
+            let mut crdt = CmRDT::<PositiveNegativeCounterEntry>::new().await?;
+
+            let entry0 = crdt.write_entry(&client_identity, PositiveNegativeCounterEntry(1), vec![]).await?;
+            let entry1 = crdt.write_entry(&client_identity, PositiveNegativeCounterEntry(1), vec![entry0]).await?;
+
+            //let _result = try_join(client(), server()).await?;
+
+            Ok(())
+        })
 }
